@@ -1,11 +1,11 @@
-const CACHE = 'lakeview-v5';
-
+const CACHE = 'lakeview-v6';
+ 
 // Only cache third-party assets, never the HTML itself
 const PRECACHE = [
   'https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap',
   'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js',
 ];
-
+ 
 self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE).then(cache =>
@@ -13,7 +13,7 @@ self.addEventListener('install', e => {
     ).then(() => self.skipWaiting())
   );
 });
-
+ 
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys().then(keys =>
@@ -21,10 +21,10 @@ self.addEventListener('activate', e => {
     ).then(() => self.clients.claim())
   );
 });
-
+ 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-
+ 
   // Never intercept Google APIs or the HTML file itself
   if (
     url.hostname.includes('googleapis.com') ||
@@ -35,7 +35,7 @@ self.addEventListener('fetch', e => {
   ) {
     return; // Let browser handle it normally
   }
-
+ 
   // Cache-first for third-party assets only (fonts, libraries)
   e.respondWith(
     caches.match(e.request).then(cached => {
@@ -50,3 +50,4 @@ self.addEventListener('fetch', e => {
     })
   );
 });
+ 
