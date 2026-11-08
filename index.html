@@ -343,7 +343,7 @@
   .tmpl-item-name { flex:1; font-size:13px; font-weight:600; }
   .tmpl-item-meta { font-family:var(--font-mono); font-size:10px; color:var(--muted); }
   /* PWA INSTALL BANNER */
-  #installBanner {
+  #installBanner, #updateBanner {
     display: none;
     position: fixed;
     bottom: 16px;
@@ -361,11 +361,12 @@
     max-width: 380px;
     width: calc(100% - 32px);
   }
-  #installBanner.show { display: flex; }
-  #installBanner .icon { font-size: 28px; flex-shrink: 0; }
-  #installBanner .text strong { display: block; font-size: 14px; color: var(--accent); }
-  #installBanner .text small { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
-  #installBanner .actions { display: flex; gap: 8px; flex-shrink: 0; }
+  #installBanner.show, #updateBanner.show { display: flex !important; }
+  #updateBanner { bottom: 84px; }
+  #installBanner .icon, #updateBanner .icon { font-size: 28px; flex-shrink: 0; }
+  #installBanner .text strong, #updateBanner .text strong { display: block; font-size: 14px; color: var(--accent); }
+  #installBanner .text small, #updateBanner .text small { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+  #installBanner .actions, #updateBanner .actions { display: flex; gap: 8px; flex-shrink: 0; }
 
   /* ─── v3 NATIVE SHELL ─── */
   body { padding-bottom: 64px; }
@@ -966,6 +967,19 @@
   </div>
 </div>
 
+<!-- UPDATE AVAILABLE BANNER -->
+<div id="updateBanner" class="" style="display:none">
+  <div class="icon">⬆️</div>
+  <div class="text">
+    <strong>Update available</strong>
+    <small id="updateBannerSub">A newer version is live</small>
+  </div>
+  <div class="actions">
+    <button class="btn primary" onclick="applyUpdate()" style="font-size:10px;padding:7px 12px">Refresh</button>
+    <button class="btn" onclick="document.getElementById('updateBanner').classList.remove('show')" style="font-size:10px;padding:7px 10px">✕</button>
+  </div>
+</div>
+
 <!-- PWA INSTALL BANNER -->
 <div id="installBanner">
   <div class="icon">📦</div>
@@ -1119,7 +1133,7 @@
 
 <script>
 // ─── GLOBAL ERROR HANDLER ─────────────────────────────────────────────────────
-const APP_VERSION = '3.1.0';
+const APP_VERSION = '3.2.0';
 console.log('Lakeview Inventory v' + APP_VERSION);
 
 window.onerror = function(msg, src, line, col, err) {
@@ -3844,6 +3858,41 @@ function commitExcelImport() {
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 document.getElementById('versionTag').textContent = 'v' + APP_VERSION;
+
+// ─── AUTO-UPDATE CHECK ────────────────────────────────────────────────────────
+async function checkForUpdate() {
+  try {
+    const res = await fetch('index.html?updatecheck=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) return;
+    const txt = await res.text();
+    const m = txt.match(/APP_VERSION = '([^']*)'/);
+    const liveVer = m ? m[1] : null;
+    if (liveVer && liveVer !== APP_VERSION) {
+      document.getElementById('updateBannerSub').textContent = 'v' + liveVer + ' is live (you have v' + APP_VERSION + ')';
+      document.getElementById('updateBanner').classList.add('show');
+    }
+  } catch (e) { /* offline or blocked — ignore */ }
+}
+
+async function applyUpdate() {
+  document.getElementById('updateBanner').classList.remove('show');
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.update()));
+    }
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+  } catch (e) { /* best effort */ }
+  location.reload(true);
+}
+
+// Check shortly after load, and again whenever the app regains focus
+setTimeout(checkForUpdate, 4000);
+window.addEventListener('focus', () => { setTimeout(checkForUpdate, 500); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(checkForUpdate, 500); });
 ['summary','scan','log','sales'].forEach(id => {
   const el = document.getElementById(id + 'View');
   if (el) el.style.cssText = 'display:none !important';
