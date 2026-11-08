@@ -11,6 +11,7 @@
 <meta name="apple-mobile-web-app-title" content="LF Inventory">
 <link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -393,7 +394,11 @@
   }
   .tab-btn .tab-ico { font-size: 21px; line-height: 1; }
   .tab-btn .tab-lbl { font-size: 10px; letter-spacing: 0.5px; }
+  #bottomTabs .tab-btn,
+  #bottomTabs .tab-btn.active,
+  #bottomTabs .tab-btn:hover { background: none !important; border: none !important; font-weight: 400 !important; }
   .tab-btn.active { color: var(--accent); }
+  #bottomTabs .tab-btn.active { color: var(--accent) !important; }
   .tab-btn.active::before {
     content: ''; position: absolute; top: 0; left: 25%; right: 25%; height: 2px;
     background: var(--accent); border-radius: 0 0 2px 2px;
@@ -526,6 +531,7 @@
   <div class="cat-chips" id="catChips"></div>
   <input type="file" id="pdfFileInput" accept=".pdf" style="display:none" onchange="handlePdfUpload(event)">
   <input type="file" id="csvFileInput" accept=".csv" style="display:none" onchange="handleCsvUpload(event)">
+  <input type="file" id="xlsxFileInput" accept=".xlsx,.xls" style="display:none" onchange="handleExcelUpload(event)">
   <div id="invList" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-top:4px"></div>
 </div>
 
@@ -1076,6 +1082,9 @@
     <div class="sheet-item" onclick="closeMoreSheet();document.getElementById('pdfFileInput').click()"><span class="si-ico">📄</span><div>Import PDF invoice<div class="si-sub">Crow, Primary Arms, Davidson's, auction</div></div></div>
     <div class="sheet-item" onclick="closeMoreSheet();document.getElementById('csvFileInput').click()"><span class="si-ico">📑</span><div>Import CSV<div class="si-sub">Bulk add from a spreadsheet</div></div></div>
     <div class="sheet-divider"></div>
+    <div class="sheet-item" onclick="closeMoreSheet();exportExcel()"><span class="si-ico">📊</span><div>Export to Excel<div class="si-sub">Inventory, sales, templates — one .xlsx</div></div></div>
+    <div class="sheet-item" onclick="closeMoreSheet();document.getElementById('xlsxFileInput').click()"><span class="si-ico">📈</span><div>Import from Excel<div class="si-sub">Load your edited .xlsx back in</div></div></div>
+    <div class="sheet-divider"></div>
     <div class="sheet-item" onclick="closeMoreSheet();openReceiveModal()"><span class="si-ico">📥</span><div>Receive shipment<div class="si-sub">Scan items into stock</div></div></div>
     <div class="sheet-item" onclick="closeMoreSheet();openCountModal()"><span class="si-ico">🔢</span><div>Inventory count<div class="si-sub">Physical count + discrepancies</div></div></div>
     <div class="sheet-item" onclick="closeMoreSheet();openReorderModal()"><span class="si-ico">🔄</span><div>Reorder list<div class="si-sub">Items running low</div></div></div>
@@ -1088,11 +1097,29 @@
   </div>
 </div>
 
+<!-- EXCEL IMPORT REVIEW MODAL -->
+<div class="modal-overlay" id="xlsxReviewModal">
+  <div class="modal" style="max-width:560px">
+    <button class="close-btn" onclick="hideModal('xlsxReviewModal')">✕</button>
+    <h2>📈 REVIEW EXCEL IMPORT</h2>
+    <div id="xlsxSummary" style="font-family:var(--font-mono);font-size:12px;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;line-height:1.9"></div>
+    <div id="xlsxMissingWrap" style="display:none">
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--red);letter-spacing:1px;margin-bottom:8px">⚠ IN THE APP BUT NOT IN YOUR FILE</div>
+      <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-bottom:10px">These weren't deleted. Choose what to do with each, or leave them as-is.</div>
+      <div id="xlsxMissingList" style="max-height:220px;overflow-y:auto;margin-bottom:8px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="hideModal('xlsxReviewModal')">Cancel</button>
+      <button class="btn primary" onclick="commitExcelImport()">✓ Apply Import</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
 // ─── GLOBAL ERROR HANDLER ─────────────────────────────────────────────────────
-const APP_VERSION = '3.0.0';
+const APP_VERSION = '3.1.0';
 console.log('Lakeview Inventory v' + APP_VERSION);
 
 window.onerror = function(msg, src, line, col, err) {
@@ -3549,7 +3576,7 @@ function exportReorderCSV() {
 }
 
 // ─── MODAL HELPERS ────────────────────────────────────────────────────────────
-const MODAL_IDS = ['itemModal','adjModal','driveModal','cartModal','templatesModal','templateBuildModal','saleModal','pdfModal','receiveModal','countModal','reorderModal'];
+const MODAL_IDS = ['itemModal','adjModal','driveModal','cartModal','templatesModal','templateBuildModal','saleModal','pdfModal','receiveModal','countModal','reorderModal','xlsxReviewModal'];
 
 function showModal(id) {
   MODAL_IDS.forEach(mid => {
@@ -3584,6 +3611,236 @@ document.addEventListener('click', (e) => {
     tdd.style.display = 'none';
   }
 });
+
+
+// ─── EXCEL ROUND-TRIP (export → edit → import) ────────────────────────────────
+function excelReady() {
+  if (typeof XLSX === 'undefined') { toast('Excel library still loading — try again in a moment', 'error'); return false; }
+  return true;
+}
+
+function exportExcel() {
+  if (!excelReady()) return;
+  const wb = XLSX.utils.book_new();
+
+  // --- Inventory sheet ---
+  const invHeader = ['ID','Name','Barcode','Category','Qty','Low Stock','Cost','Price','Notes','Archived'];
+  const invRows = DB.items.map(i => [i.id, i.name, i.barcode, i.category, i.qty, i.lowStock, i.cost, i.price, i.notes, i.archived ? 'Yes' : '']);
+  const invWs = XLSX.utils.aoa_to_sheet([invHeader, ...invRows]);
+  invWs['!cols'] = [{wch:22},{wch:36},{wch:16},{wch:16},{wch:7},{wch:10},{wch:9},{wch:9},{wch:30},{wch:9}];
+  XLSX.utils.book_append_sheet(wb, invWs, 'Inventory');
+
+  // --- Sales sheet ---
+  const salesHeader = ['ID','Date','Item','Item ID','Qty','Price Each','Revenue','Cost','Profit','Method','Out-of-State','Friend/Family','Notes'];
+  const salesRows = (SDB.sales||[]).map(s => [s.id, s.date||'', s.itemName||'', s.itemId||'', s.qty||0, s.priceEach||0, s.revenue||0, s.cost||0, s.profit||0, s.method||'', s.outOfState?'Yes':'', s.friendSale?'Yes':'', s.notes||'']);
+  const salesWs = XLSX.utils.aoa_to_sheet([salesHeader, ...salesRows]);
+  salesWs['!cols'] = [{wch:24},{wch:12},{wch:30},{wch:22},{wch:6},{wch:10},{wch:10},{wch:9},{wch:9},{wch:8},{wch:12},{wch:13},{wch:24}];
+  XLSX.utils.book_append_sheet(wb, salesWs, 'Sales');
+
+  // --- Templates sheet (one row per template-item) ---
+  const tmplHeader = ['Template ID','Template Name','Description','Item ID','Item Name','Qty'];
+  const tmplRows = [];
+  (TDB.templates||[]).forEach(t => {
+    if (!t.items || !t.items.length) { tmplRows.push([t.id, t.name, t.desc||'', '', '', '']); return; }
+    t.items.forEach(it => tmplRows.push([t.id, t.name, t.desc||'', it.itemId, it.name||'', it.qty||1]));
+  });
+  const tmplWs = XLSX.utils.aoa_to_sheet([tmplHeader, ...tmplRows]);
+  tmplWs['!cols'] = [{wch:20},{wch:24},{wch:28},{wch:22},{wch:30},{wch:6}];
+  XLSX.utils.book_append_sheet(wb, tmplWs, 'Templates');
+
+  // --- Instructions sheet ---
+  const info = [
+    ['Lakeview Inventory — Excel export'],
+    ['Exported ' + new Date().toLocaleString()],
+    [''],
+    ['HOW TO USE'],
+    ['1. Edit the Inventory, Sales, or Templates tabs.'],
+    ['2. DO NOT change or delete the ID column — it is how the app matches rows back.'],
+    ['3. To add a NEW item/sale, add a row and leave its ID blank.'],
+    ['4. Save the file (keep it as .xlsx), then use ⋯ → Import from Excel.'],
+    [''],
+    ['NOTES'],
+    ['• Deleting a row here does NOT delete it in the app — you will be asked what to do with any item that is missing.'],
+    ['• Qty, Cost, Price, Low Stock must be numbers.'],
+    ['• Archived: put "Yes" to flag an item do-not-reorder, blank to keep it active.'],
+    ['• Every import can be undone with the ↩ Undo button.'],
+  ];
+  const infoWs = XLSX.utils.aoa_to_sheet(info);
+  infoWs['!cols'] = [{wch:90}];
+  XLSX.utils.book_append_sheet(wb, infoWs, 'Read Me');
+
+  const fname = 'lakeview-inventory-' + new Date().toISOString().slice(0,10) + '.xlsx';
+  XLSX.writeFile(wb, fname);
+  toast('Exported ' + fname, 'success');
+}
+
+// Holds the parsed import until the user confirms in the review modal
+let pendingExcelImport = null;
+
+function handleExcelUpload(event) {
+  const file = event.target.files[0];
+  event.target.value = '';
+  if (!file) return;
+  if (!excelReady()) return;
+  toast('Reading Excel…');
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const getSheet = (name) => {
+        const key = wb.SheetNames.find(n => n.toLowerCase() === name.toLowerCase());
+        return key ? XLSX.utils.sheet_to_json(wb.Sheets[key], {defval:''}) : [];
+      };
+      const invRows = getSheet('Inventory');
+      const salesRows = getSheet('Sales');
+      const tmplRows = getSheet('Templates');
+
+      if (!invRows.length && !salesRows.length && !tmplRows.length) {
+        toast('No Inventory/Sales/Templates tabs found in that file', 'error'); return;
+      }
+
+      // ---- Build proposed inventory changes ----
+      const existing = DB.items;
+      const byId = {}; existing.forEach(i => byId[i.id] = i);
+      const seenIds = new Set();
+      let invUpdated = 0, invAdded = 0, invErrors = [];
+      const newItems = existing.map(i => ({...i})); // start from current, mutate
+
+      invRows.forEach((row, idx) => {
+        const name = String(row['Name']||'').trim();
+        const id = String(row['ID']||'').trim();
+        if (!name && !id) return; // blank row
+        if (!name) { invErrors.push('Row ' + (idx+2) + ': missing Name'); return; }
+        const rec = {
+          name,
+          barcode: String(row['Barcode']||'').trim(),
+          category: String(row['Category']||'').trim(),
+          qty: Number(row['Qty'])||0,
+          lowStock: Number(row['Low Stock'])||2,
+          cost: Number(String(row['Cost']).replace(/[^0-9.\-]/g,''))||0,
+          price: Number(String(row['Price']).replace(/[^0-9.\-]/g,''))||0,
+          notes: String(row['Notes']||'').trim(),
+          archived: String(row['Archived']||'').trim().toLowerCase().startsWith('y')
+        };
+        if (id && byId[id]) {
+          const tgt = newItems.find(x => x.id === id);
+          Object.assign(tgt, rec, {id});
+          seenIds.add(id); invUpdated++;
+        } else {
+          rec.id = 'item_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+          newItems.push(rec); invAdded++;
+        }
+      });
+
+      // Items in app but absent from the sheet (only when the Inventory tab had data)
+      const missing = invRows.length ? existing.filter(i => !seenIds.has(i.id)) : [];
+
+      // ---- Sales (add/update by ID; never auto-remove) ----
+      let salesUpdated = 0, salesAdded = 0;
+      const newSales = (SDB.sales||[]).map(s => ({...s}));
+      const salesById = {}; newSales.forEach(s => salesById[s.id] = s);
+      salesRows.forEach(row => {
+        const id = String(row['ID']||'').trim();
+        const item = String(row['Item']||'').trim();
+        if (!id && !item) return;
+        const rec = {
+          date: String(row['Date']||'').trim(),
+          itemName: item,
+          itemId: String(row['Item ID']||'').trim(),
+          qty: Number(row['Qty'])||0,
+          priceEach: Number(String(row['Price Each']).replace(/[^0-9.\-]/g,''))||0,
+          revenue: Number(String(row['Revenue']).replace(/[^0-9.\-]/g,''))||0,
+          cost: Number(String(row['Cost']).replace(/[^0-9.\-]/g,''))||0,
+          profit: Number(String(row['Profit']).replace(/[^0-9.\-]/g,''))||0,
+          method: String(row['Method']||'cash').trim(),
+          outOfState: String(row['Out-of-State']||'').toLowerCase().startsWith('y'),
+          friendSale: String(row['Friend/Family']||'').toLowerCase().startsWith('y'),
+          notes: String(row['Notes']||'').trim()
+        };
+        if (id && salesById[id]) { Object.assign(salesById[id], rec, {id}); salesUpdated++; }
+        else { rec.id = 'sale_' + Date.now() + '_' + Math.random().toString(36).slice(2); newSales.push(rec); salesAdded++; }
+      });
+
+      // ---- Templates (rebuild any template whose ID appears in the sheet) ----
+      let tmplChanged = 0;
+      const newTemplates = (TDB.templates||[]).map(t => ({...t, items:[...(t.items||[])]}));
+      if (tmplRows.length) {
+        const grouped = {};
+        tmplRows.forEach(row => {
+          const tid = String(row['Template ID']||'').trim() || ('tmpl_' + Date.now() + '_' + Math.random().toString(36).slice(2));
+          if (!grouped[tid]) grouped[tid] = { id: tid, name: String(row['Template Name']||'').trim()||'Untitled', desc: String(row['Description']||'').trim(), items: [] };
+          const itemId = String(row['Item ID']||'').trim();
+          if (itemId) grouped[tid].items.push({ itemId, name: String(row['Item Name']||'').trim(), qty: Number(row['Qty'])||1 });
+        });
+        Object.values(grouped).forEach(gt => {
+          const existingIdx = newTemplates.findIndex(t => t.id === gt.id);
+          if (existingIdx !== -1) newTemplates[existingIdx] = gt; else newTemplates.push(gt);
+          tmplChanged++;
+        });
+      }
+
+      pendingExcelImport = { newItems, newSales, newTemplates, missing };
+
+      // ---- Build the review summary ----
+      const sum = [];
+      sum.push('<b>Inventory:</b> ' + invUpdated + ' updated · ' + invAdded + ' added');
+      if (salesRows.length) sum.push('<b>Sales:</b> ' + salesUpdated + ' updated · ' + salesAdded + ' added');
+      if (tmplRows.length) sum.push('<b>Templates:</b> ' + tmplChanged + ' changed');
+      if (invErrors.length) sum.push('<span style="color:var(--red)"><b>' + invErrors.length + ' row error(s):</b> ' + esc(invErrors.slice(0,5).join('; ')) + (invErrors.length>5?'…':'') + '</span>');
+      document.getElementById('xlsxSummary').innerHTML = sum.join('<br>');
+
+      // ---- Missing-items review ----
+      const mwrap = document.getElementById('xlsxMissingWrap');
+      if (missing.length) {
+        mwrap.style.display = 'block';
+        document.getElementById('xlsxMissingList').innerHTML = missing.map(m =>
+          `<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;margin-bottom:6px">
+            <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${esc(m.name)}</div><div style="font-family:var(--font-mono);font-size:10px;color:var(--muted)">qty ${m.qty}${m.category?' · '+esc(m.category):''}</div></div>
+            <select id="miss_${m.id}" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:11px;padding:5px 8px;border-radius:5px">
+              <option value="keep">Keep</option>
+              <option value="archive">Archive</option>
+              <option value="delete">Delete</option>
+            </select>
+          </div>`
+        ).join('');
+      } else {
+        mwrap.style.display = 'none';
+      }
+
+      showModal('xlsxReviewModal');
+    } catch(err) {
+      console.error(err);
+      toast('Excel import failed: ' + err.message, 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function commitExcelImport() {
+  if (!pendingExcelImport) { hideModal('xlsxReviewModal'); return; }
+  pushUndo('Excel import');
+  let { newItems, newSales, newTemplates, missing } = pendingExcelImport;
+
+  // Apply missing-item decisions
+  const toDelete = new Set();
+  missing.forEach(m => {
+    const sel = document.getElementById('miss_' + m.id);
+    const choice = sel ? sel.value : 'keep';
+    if (choice === 'archive') { const t = newItems.find(x => x.id === m.id); if (t) t.archived = true; }
+    else if (choice === 'delete') toDelete.add(m.id);
+  });
+  if (toDelete.size) newItems = newItems.filter(i => !toDelete.has(i.id));
+
+  DB.items = newItems;
+  SDB.sales = newSales;
+  TDB.templates = newTemplates;
+
+  pendingExcelImport = null;
+  hideModal('xlsxReviewModal');
+  renderTable(); renderStats();
+  if (document.getElementById('summaryView').classList.contains('active')) renderSummary();
+  toast('Excel import applied', 'success');
+}
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 document.getElementById('versionTag').textContent = 'v' + APP_VERSION;

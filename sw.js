@@ -1,9 +1,10 @@
-const CACHE = 'lakeview-v6';
+const CACHE = 'lakeview-v7';
 
 // Only cache third-party assets, never the HTML itself
 const PRECACHE = [
   'https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap',
   'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
 ];
 
 self.addEventListener('install', e => {
